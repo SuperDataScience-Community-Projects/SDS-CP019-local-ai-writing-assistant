@@ -38,7 +38,7 @@ The AI Local Writing Assistant is a Generative AI application designed to assist
 ## Technical Requirements
 
 - **Model**:
-  - Lightweight LLM downloaded and run using Ollama (llama3.1, Qwen2, mistral).
+  - Lightweight LLM downloaded and run using Ollama (llama2, Qwen2, mistral).
   
 - **Backend**:
   - Python with prompt engineering logic for generating creative content.

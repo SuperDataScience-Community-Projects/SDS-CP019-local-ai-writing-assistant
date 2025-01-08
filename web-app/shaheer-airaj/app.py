@@ -46,6 +46,7 @@ def brochure_bot(prompt, history):
     system_prompt += " mention clearly that you do not know the answer."
     system_prompt += " Your first task is to ask the user to give you the URL of a website."
     system_prompt += " If you do not find one, ask the user for one."
+    system_prompt += " Do not ask the user for any additional input, just keep the tone formal."
 
     url = get_url_from_prompt(prompt)
     try:
@@ -72,11 +73,9 @@ def brochure_bot(prompt, history):
     # streaming the response from the model
     # this prints out each output token form the model to have the resulting text displayed in real time
     response = ""
-    for chunk in result:
-        if 'message' in chunk and 'content' in chunk['message']:
-            chunk_text = chunk['message']['content']
-            response += chunk_text or ""
-            yield response
+    for chunk in stream:
+        response += chunk.choices[0].delta.content
+        yield response
 
 with gr.Blocks() as demo:
     gr.Markdown(

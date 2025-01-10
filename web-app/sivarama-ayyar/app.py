@@ -1,88 +1,118 @@
 import gradio as gr
-from huggingface_hub import InferenceClient
 import os
 import requests
+from huggingface_hub import InferenceClient
 from bs4 import BeautifulSoup
-"""
-For more information on `huggingface_hub` Inference API support, please check the docs: https://huggingface.co/docs/huggingface_hub/v0.22.2/en/guides/inference
-"""
- # A class to represent a Webpage
+import google.generativeai as genai
+
+# A class to represent a Webpage
 
 class Website:
-    """
-    A utility class to represent a Website that we have scraped
-    """
     url: str
     title: str
     text: str
 
     def __init__(self, url):
-        """
-        Create this Website object from the given url using the BeautifulSoup library
-        """
         self.url = url
         response = requests.get(url)
-        soup = BeautifulSoup(response.content, 'html.parser')
+        self.body = response.content
+        soup = BeautifulSoup(self.body, 'html.parser')
         self.title = soup.title.string if soup.title else "No title found"
         for irrelevant in soup.body(["script", "style", "img", "input"]):
             irrelevant.decompose()
         self.text = soup.body.get_text(separator="\n", strip=True)
 
-# Define our system prompt
-system_prompt = "You are a creative writing assistant that analyzes the contents of a website \
-and provides a short summary, ignoring text that might be navigation related. \
-Respond with key points."
+    def get_contents(self):
+        return f"Webpage Title:\n{self.title}\nWebpage Contents:\n{self.text}\n\n"
 
-# A function that writes a User Prompt that asks for summaries of websites:
 
-def user_prompt_for(website):
-    user_prompt = f"You are looking at a website titled {website.title}"
-    user_prompt += "The contents of this website is as follows; \
-please provide a short, crisp summary of this website with key points. \
-If it includes news or announcements, then summarize these too.\n\n"
-    user_prompt += website.text
-    return user_prompt
+system_message = "You are an assistant that analyzes the contents of a company website landing page \
+and creates a short brochure about the company for prospective customers, investors and recruits. Do not use any logos. Respond in markdown."
 
-def get_urls_from_prompt(prompt):
-    urls=[]
-    if prompt is not None:
-        x= prompt.split()
-        for i in x:
-            if i.find("https:")==0 or i.find("http:")==0:
-                urls.append(i)
-    return urls
+HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
+GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY")
+client = InferenceClient(api_key=HUGGINGFACE_API_KEY)
+LLAMA_MODEL = "meta-llama/Llama-3.2-3B-Instruct"
+QWEN_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"
+genai.configure(api_key=GEMINI_API_KEY)
 
-def summarizer_bot(prompt, history):
-    url = get_urls_from_prompt(prompt)
-    try:
-       prompt += user_prompt_for(Website(url[0]))
-    except:
-       prompt += "No URL provided"
 
-    messages = [{"role": "assistant", "content": system_prompt}] + history + [{"role": "user", "content": prompt}]
+def stream_gemini(prompt):
+    gemini = genai.GenerativeModel(
+        model_name='gemini-1.5-flash-001',
+        safety_settings=None,
+        system_instruction=system_message
+    )
 
-    HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
-    client = InferenceClient(api_key=HUGGINGFACE_API_KEY)
-    MODEL = "meta-llama/Llama-3.2-3B-Instruct"
+    response = gemini.generate_content(prompt, safety_settings=[
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"}], stream=True)
 
-    stream = client.chat.completions.create(
-        model=MODEL,
-        messages=messages,
+    result = ""
+    for chunk in response:
+        result += chunk.text
+        yield result
+
+
+def stream_llama(prompt):
+    response = client.chat.completions.create(
+        model=LLAMA_MODEL,
+        messages=[
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": prompt}
+        ],
         max_tokens=500,
         stream=True
     )
-    response = ""
-    for chunk in stream:
-        chunk_text = chunk.choices[0].delta.content
-        response += chunk_text
-        yield response
+    result = ""
+    for chunk in response:
+        result += chunk.choices[0].delta.content or ''
+        yield result
 
-gr.ChatInterface(
-    fn=summarizer_bot,
-    type="messages",
-    chatbot=gr.Chatbot(height=300),
-    textbox=gr.Textbox(placeholder="Type Question Here", container=False, scale=3),
-    title="Summarizer bot",
-    description="Give me the link to a website for which you want a summary of the contents of this website.",
-    theme="Glass"
-    ).launch()
+
+def stream_qwen(prompt):
+    response = client.chat.completions.create(
+        model=QWEN_MODEL,
+        messages=[
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": prompt}
+        ],
+        max_tokens=500,
+        stream=True
+    )
+    result = ""
+    for chunk in response:
+        result += chunk.choices[0].delta.content or ''
+        yield result
+
+
+def stream_brochure(company_name, url, model, language, response_tone):
+    prompt = f"Please generate a {response_tone} company brochure in {language} for {company_name}. Here is their landing page:\n"
+    prompt += Website(url).get_contents()
+    if model == "Llama":
+        result = stream_llama(prompt)
+    elif model == "Gemini":
+        result = stream_gemini(prompt)
+    elif model == "Qwen":
+        result = stream_qwen(prompt)
+    else:
+        raise ValueError("Unknown model")
+    yield from result
+
+
+view = gr.Interface(
+    fn=stream_brochure,
+    inputs=[
+        gr.Textbox(label="Company name:"),
+        gr.Textbox(label="Landing page URL including http:// or https://"),
+        gr.Dropdown(["Gemini", "Qwen", "Llama"], label="Select model"),
+        gr.Dropdown(["English", "French", "Spanish", "German", "Hindi"]),
+        gr.Dropdown(["Informational", "Promotional", "Humorous", "Business"], label="Select tone")],
+    outputs=[gr.Markdown(label="Brochure:")],
+    flagging_mode="never",
+    title="Welcome to vsstech's Brochure Generator",
+    description="Generates short brochure for company URL in selected language and tone."
+)
+view.launch()

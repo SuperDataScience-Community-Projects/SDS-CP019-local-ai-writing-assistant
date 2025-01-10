@@ -3,3 +3,5 @@ gradio
 requests
 bs4
 huggingface-hub
+python-dotenv
+google-generativeai

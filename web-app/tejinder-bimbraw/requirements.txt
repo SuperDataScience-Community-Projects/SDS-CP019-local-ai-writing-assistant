@@ -1,0 +1,4 @@
+requests
+gradio
+bs4
+huggingface_hub
